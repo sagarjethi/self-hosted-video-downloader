@@ -21,15 +21,21 @@ seconds, not 3 hours.
 - 🗂 **Session history** — re-download any capture for 15 minutes, with file sizes
 - 🔒 **Self-hosted** — your server, your data; per-IP rate limiting built in
 
+The server is a **single static Go binary** (~6.5 MB, ~12 MB RSS at idle) with
+the React UI embedded via `embed.FS` — download one file, run it, done. A
+TypeScript/Node implementation of the same API lives in `server/` for reference.
+
 ```
 self-hosted-video-downloader/
-├─ server/        Hono API (probe, jobs, cut, thumb proxy) + static serving
-│  ├─ index.ts    routes + server bootstrap
-│  ├─ ytdlp.ts    yt-dlp wrapper: probe() + download() + cookies + friendly errors
-│  ├─ jobs.ts     in-memory job store + temp-file lifecycle + cancel
-│  └─ ratelimit.ts per-IP limiter
-├─ web/           Vite + React UI ("broadcast capture deck")
-└─ Dockerfile     UI + API + yt-dlp + ffmpeg, one image
+├─ cmd/downcut/          Go entry point (graceful shutdown, embedded UI)
+├─ internal/
+│  ├─ api/               routes + handlers + thumb proxy (stdlib net/http)
+│  ├─ jobs/              job store: goroutine per job, TTL cleanup, cancel
+│  ├─ ytdlp/             yt-dlp wrapper: probe, download, cookies, friendly errors
+│  └─ ratelimit/         per-IP limiter
+├─ web/                  Vite + React UI ("broadcast capture deck") + embed.go
+├─ server/               original Node/Hono implementation (same API contract)
+└─ Dockerfile            multi-stage: UI build → Go build → ffmpeg+yt-dlp runtime
 ```
 
 ## ⚠️ Self-hosted — read this
@@ -40,16 +46,27 @@ to download, and respect each platform's Terms of Service and copyright law. The
 software and its authors provide **no warranty and accept no liability**. This is
 not an endorsement of downloading copyrighted material.
 
-## Quick start
+## Quick start (Go — recommended)
 
-Requires Node 20+, plus `yt-dlp` and `ffmpeg` on your PATH
-(`brew install yt-dlp ffmpeg` on macOS, `apt install ffmpeg` + [yt-dlp install](https://github.com/yt-dlp/yt-dlp#installation) on Linux).
+Requires Go 1.25+, Node 20+ (UI build only), plus `yt-dlp` and `ffmpeg` on your
+PATH (`brew install yt-dlp ffmpeg` on macOS, `apt install ffmpeg` +
+[yt-dlp install](https://github.com/yt-dlp/yt-dlp#installation) on Linux).
 
 ```bash
-npm install        # or pnpm install
-npm run build      # builds web/dist
-npm start          # serves UI + API on :8787
+npm install && make build   # builds the UI, embeds it into the Go binary
+./downcut                   # serves UI + API on :8787
 # open http://localhost:8787
+```
+
+The result is one self-contained `downcut` binary — copy it to any machine that
+has `yt-dlp` + `ffmpeg` and run it. `make test` / `make lint` for checks.
+
+### Node alternative
+
+The original TypeScript server in `server/` speaks the identical API:
+
+```bash
+npm install && npm run build && npm start    # same app on :8787
 ```
 
 ### Development (hot reload)
@@ -57,7 +74,7 @@ npm start          # serves UI + API on :8787
 ```bash
 npm run dev
 # UI:  http://localhost:5174   (Vite, proxies /api → :8787)
-# API: http://localhost:8787
+# API: http://localhost:8787   (Node server; or run ./downcut instead)
 ```
 
 ## How do I download an Instagram reel?
@@ -67,10 +84,10 @@ no login needed. Private or age-restricted posts need a logged-in session:
 
 ```bash
 # 1. Reuse your browser's Instagram session (easiest on your own machine)
-YTDLP_COOKIES_BROWSER=chrome npm start
+YTDLP_COOKIES_BROWSER=chrome ./downcut
 
 # 2. Or export cookies.txt (e.g. "Get cookies.txt LOCALLY" browser extension)
-YTDLP_COOKIES=/path/to/cookies.txt npm start
+YTDLP_COOKIES=/path/to/cookies.txt ./downcut
 ```
 
 The same cookies also unlock age-restricted / members-only YouTube videos.

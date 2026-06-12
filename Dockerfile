@@ -1,30 +1,36 @@
-# Self-hosted Downcut downloader — UI + API + yt-dlp + ffmpeg in one image.
-FROM node:20-slim
+# Downcut — Go server + embedded React UI + yt-dlp + ffmpeg, one image.
 
-# System deps: ffmpeg for muxing, ca-certs/curl to fetch the yt-dlp binary.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl \
-  && rm -rf /var/lib/apt/lists/*
-
-# yt-dlp standalone linux binary (self-contained, no python needed).
-RUN curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
-      -o /usr/local/bin/yt-dlp \
-  && chmod a+rx /usr/local/bin/yt-dlp
-
+# Stage 1: build the React UI
+FROM node:20-slim AS ui
 WORKDIR /app
-
-# Install deps first for better layer caching.
-COPY package.json ./
-RUN npm install
-
-# Build the UI, then drop dev deps that aren't needed at runtime (vite stays
-# out; tsx + hono are required to run the server).
-COPY . .
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY vite.config.ts ./
+COPY web ./web
 RUN npm run build
 
-ENV NODE_ENV=production
+# Stage 2: build the Go binary with the UI embedded
+FROM golang:1.25 AS build
+WORKDIR /src
+COPY go.mod ./
+COPY cmd ./cmd
+COPY internal ./internal
+COPY web/embed.go ./web/embed.go
+COPY --from=ui /app/web/dist ./web/dist
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /downcut ./cmd/downcut
+
+# Stage 3: runtime — ffmpeg for muxing, yt-dlp standalone binary
+FROM debian:bookworm-slim
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl \
+  && rm -rf /var/lib/apt/lists/* \
+  && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
+       -o /usr/local/bin/yt-dlp \
+  && chmod a+rx /usr/local/bin/yt-dlp \
+  && apt-get purge -y curl
+
+COPY --from=build /downcut /usr/local/bin/downcut
+
 ENV PORT=8787
 EXPOSE 8787
-
-# tsx runs the TypeScript server directly; web/dist is served statically.
-CMD ["npm", "start"]
+CMD ["downcut"]
